@@ -1,44 +1,67 @@
-from langchain.document_loaders import UnstructuredURLLoader, TextLoader 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-from sentence_transformers import SentenceTransformer
-
+import os
+import streamlit as st
+import pickle
+import time
+import langchain
 import faiss
-import numpy as np
+from langchain.llms import OpenAI
+from langchain.chains import RetrievalQAWithSourcesChain
+from langchain.chains.qa_with_sources.loading import load_qa_with_sources_chain
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import UnstructuredURLLoader
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+# from langchain.vectorstores import FaissFlatIndexStore
 
-# loader = UnstructuredURLLoader(urls=["https://www.bbc.co.uk/news/live/uk-67390343",
-                                    #  "https://www.bbc.co.uk/news/live/uk-67418363",])
-loader = TextLoader(file_path="ex_text.txt")
-data = loader.load()
-# print(len(data))
-# print(data[0])
+# initialize variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
-splitter = RecursiveCharacterTextSplitter(
-    separators=['\n', '\n', '.', '?', '!'],
+# load the model
+llm = OpenAI(temperature=0.9, max_tokens=500)
+
+# load the chain (data)
+loaders = UnstructuredURLLoader(urls=[
+    "https://www.bbc.co.uk/news/science-environment-67383755",
+    "https://www.bbc.co.uk/news/business-67284936",
+    "https://www.bbc.co.uk/news/uk-67302048",
+])
+data = loaders.load()
+
+# split the data into chunks
+text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
-    chunk_overlap=100
+    chunk_overlap=100,
 )
-chunks = splitter.split_text(data[0].page_content)
-# print(chunks)
+docs = text_splitter.split_documents(data)
 
-sentence = "Rishi Sunak says the government is working on a new treaty with Rwanda, after the government's asylum seeker plan was ruled unlawful"
+# create the embeddings
+embeddings = OpenAIEmbeddings()
 
-encoder = SentenceTransformer("all-mpnet-base-v2")
-vectors = encoder.encode(sentence)
-# print(vectors.shape)
+# create the vector store
+vector_index = FAISS.from_documents(docs, embeddings)
+time.sleep(15)
 
-vec_arr = np.array([vectors]).reshape(1, -1)
-# print(vec_arr.shape)
-dim = vec_arr.shape[1]
+# Store vector index locally
+try:
+    file_path = "vector_index.pkl"
+    with open(file_path, "wb") as f:
+        pickle.dump(vector_index, f)
 
-index = faiss.IndexFlatL2(dim)
-index.add(vec_arr)
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            vector_index = pickle.load(f)
+except:
+    pass
 
-search_query = "How many hours per week watched?"
-query_vector = encoder.encode(search_query)
-# print(query_vector.shape)
+# create retrieval chain
+r_chain = RetrievalQAWithSourcesChain(llm=llm, retriever=vector_index.as_retriever())
 
-q_arr = np.array([query_vector]).reshape(1, -1)
+# create retrieval query
+query = "Is AI good for the world?"
 
-search = index.search(q_arr, 2)
-print(search)
+r_chain({"question": query}, return_only_outputs=True)
+print(r_chain)
+
+
+
